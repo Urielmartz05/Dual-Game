@@ -7,13 +7,11 @@ const W = canvas.width;
 const H = canvas.height;
 
 // ---------------------------------------------------------------------------
-// Sprite sheet (New Sprite.png: 8 frames en una fila, pixel art).
-// Cada frame es [x, y, ancho, alto] medido sobre la imagen.
-// Frames 0–4: parado (idle); frames 5–7: caminando / corriendo.
+// Sprite sheets:
+//   Jugador 1: New Sprite.png (8 frames en una fila, pixel art)
+//   Jugador 2: player2.png (5 columnas x 4 filas)
 // ---------------------------------------------------------------------------
-const SHEET_SRC = 'New Sprite.png';
-
-const STRIP = [
+const STRIP_P1 = [
     [1, 1, 99, 136],    // 0: idle
     [159, 1, 98, 135],  // 1: idle
     [317, 1, 98, 136],  // 2: idle
@@ -24,26 +22,59 @@ const STRIP = [
     [1106, 1, 98, 136]  // 7: paso 3
 ];
 
-const FRAMES = {
-    idle: [STRIP[0], STRIP[1], STRIP[2], STRIP[3], STRIP[4]],
-    walk: [STRIP[4], STRIP[5], STRIP[6], STRIP[7], STRIP[6]],
-    run:  [STRIP[5], STRIP[6], STRIP[7], STRIP[6]],
-    jump: [STRIP[4], STRIP[5], STRIP[7], STRIP[6], STRIP[4]]
-};
-
-// Prepara cada frame: ancla horizontal = centro del recorte; ancla vertical = pies.
-for (const name in FRAMES) {
-    FRAMES[name] = FRAMES[name].map(f => ({
-        sx: f[0], sy: f[1], sw: f[2], sh: f[3],
-        ax: f[2] / 2,
-        ay: f[3]
-    }));
+function buildP1Frames() {
+    const raw = {
+        idle: [STRIP_P1[0], STRIP_P1[1], STRIP_P1[2], STRIP_P1[3], STRIP_P1[4]],
+        walk: [STRIP_P1[4], STRIP_P1[5], STRIP_P1[6], STRIP_P1[7], STRIP_P1[6]],
+        run:  [STRIP_P1[5], STRIP_P1[6], STRIP_P1[7], STRIP_P1[6]],
+        jump: [STRIP_P1[4], STRIP_P1[5], STRIP_P1[7], STRIP_P1[6], STRIP_P1[4]]
+    };
+    const out = {};
+    for (const name in raw) {
+        out[name] = raw[name].map(f => ({
+            sx: f[0], sy: f[1], sw: f[2], sh: f[3],
+            ax: f[2] / 2,
+            ay: f[3]
+        }));
+    }
+    return out;
 }
 
-const sheet = new Image();
-let sheetReady = false;
-sheet.onload = () => { sheetReady = true; };
-sheet.src = SHEET_SRC;
+function buildP2Frames() {
+    const cellW = 409 / 5;
+    const raw = {
+        idle: [[18, 22, 52, 104], [98, 22, 51, 104], [179, 22, 52, 104], [260, 22, 52, 104], [341, 22, 52, 104]],
+        walk: [[22, 161, 49, 108], [100, 161, 51, 108], [177, 161, 54, 106], [257, 161, 53, 106], [333, 162, 58, 105]],
+        run:  [[19, 307, 65, 100], [96, 307, 65, 101], [175, 307, 67, 100], [252, 307, 66, 97], [328, 308, 69, 98]],
+        jump: [[19, 474, 57, 109], [98, 456, 57, 111], [177, 430, 57, 112], [251, 459, 61, 110], [326, 493, 62, 101]]
+    };
+    const out = {};
+    for (const name in raw) {
+        const baseline = Math.max(...raw[name].map(f => f[1] + f[3]));
+        out[name] = raw[name].map((f, i) => ({
+            sx: f[0], sy: f[1], sw: f[2], sh: f[3],
+            ax: cellW * i + cellW / 2 - f[0],
+            ay: name === 'jump' ? f[3] : baseline - f[1]
+        }));
+    }
+    return out;
+}
+
+function loadSprite(src, frames, scale, smooth) {
+    const img = new Image();
+    const s = { img, ready: false, frames, scale, smooth };
+    img.onload = () => { s.ready = true; };
+    img.src = src;
+    return s;
+}
+
+const SPRITES = {
+    1: loadSprite('New Sprite.png', buildP1Frames(), 0.72, false),
+    2: loadSprite('player2.png', buildP2Frames(), 1, true)
+};
+
+let mySlot = 1;
+function mySprite() { return SPRITES[mySlot] || SPRITES[1]; }
 
 // ---------------------------------------------------------------------------
 // Constantes de física
@@ -54,7 +85,6 @@ const WALK_SPEED = 170;
 const RUN_SPEED = 360;
 const GRAVITY = 2000;
 const JUMP_VELOCITY = -700;  // altura máx. ≈ 122 px (obstáculos miden 30–75)
-const SPRITE_SCALE = 0.72;
 const HIT_W = 38;            // hitbox del personaje (más chica que el dibujo)
 const HIT_H = 88;
 
@@ -77,6 +107,35 @@ let showHitboxes = false;
 let collisions = 0;
 let lastCollisionTime = -10;
 let time = 0;
+let gameOver = false;
+let gameOverInfo = null;
+
+function resetMatch() {
+    gameOver = false;
+    gameOverInfo = null;
+    collisions = 0;
+    lastCollisionTime = -10;
+    obstacleCache.clear();
+    player.x = 0;
+    player.y = GROUND_Y;
+    player.vx = 0;
+    player.vy = 0;
+    player.grounded = true;
+    player.facing = 1;
+    player.state = 'idle';
+    player.frame = 0;
+    player.frameTime = 0;
+    player.jumpTime = 0;
+    player.landTimer = 0;
+    player.blocked = false;
+    for (const rp of remotePlayers.values()) {
+        rp.x = 0;
+        rp.y = GROUND_Y;
+        rp.facing = 1;
+        rp.state = 'idle';
+        rp.frame = 0;
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Socket.IO opcional (sincroniza jugadores en vivo cuando se sirve desde server.js)
@@ -85,11 +144,16 @@ const remotePlayers = new Map();
 let spriteSocket = null;
 let mySocketId = null;
 let lastNetSend = 0;
+let roomFull = false;
 
 if (typeof io !== 'undefined') {
     spriteSocket = io('/sprite');
-    spriteSocket.on('sprite_init', ({ id, players }) => {
+    spriteSocket.on('sprite_full', () => {
+        roomFull = true;
+    });
+    spriteSocket.on('sprite_init', ({ id, slot, players }) => {
         mySocketId = id;
+        mySlot = slot || 1;
         remotePlayers.clear();
         for (const p of players) {
             if (p.id !== mySocketId) remotePlayers.set(p.id, p);
@@ -104,6 +168,13 @@ if (typeof io !== 'undefined') {
     spriteSocket.on('sprite_left', ({ id }) => {
         remotePlayers.delete(id);
     });
+    spriteSocket.on('sprite_gameover', (info) => {
+        gameOver = true;
+        gameOverInfo = info;
+    });
+    spriteSocket.on('sprite_restart', () => {
+        resetMatch();
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -116,6 +187,10 @@ const GAME_KEYS = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Space',
 window.addEventListener('keydown', e => {
     if (GAME_KEYS.includes(e.code)) e.preventDefault();
     if (e.code === 'KeyH' && !e.repeat) showHitboxes = !showHitboxes;
+    if ((e.code === 'KeyR' || e.key === 'r' || e.key === 'R') && !e.repeat && !e.ctrlKey && !e.metaKey) {
+        resetMatch();
+        if (spriteSocket && spriteSocket.connected) spriteSocket.emit('sprite_restart');
+    }
     keys[e.code] = true;
 });
 window.addEventListener('keyup', e => { keys[e.code] = false; });
@@ -179,6 +254,13 @@ function registerHit(o) {
     player.blocked = true;
     lastCollisionTime = time;
     if (!o.hit) { o.hit = true; collisions++; }
+    if (!gameOver) {
+        gameOver = true;
+        gameOverInfo = { loserSlot: mySlot, winnerSlot: mySlot === 1 ? 2 : 1 };
+        if (spriteSocket && spriteSocket.connected) {
+            spriteSocket.emit('sprite_hit');
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +268,7 @@ function registerHit(o) {
 // ---------------------------------------------------------------------------
 function update(dt) {
     time += dt;
+    if (gameOver) return;
 
     const left = keys.ArrowLeft || keys.KeyA;
     const right = keys.ArrowRight || keys.KeyD;
@@ -272,7 +355,7 @@ function update(dt) {
     if (player.state !== 'jump') {
         player.frameTime += dt;
         const step = 1 / fps;
-        const totalFrames = FRAMES[player.state].length;
+        const totalFrames = mySprite().frames[player.state].length;
         while (player.frameTime >= step) {
             player.frameTime -= step;
             player.frame = (player.frame + 1) % totalFrames;
@@ -418,30 +501,32 @@ function drawObstacle(o, camX) {
 // Personaje
 // ---------------------------------------------------------------------------
 function currentFrame() {
+    const frames = mySprite().frames;
     if (player.state === 'jump') {
         let i;
         if (player.jumpTime < 0.06) i = 0;           // agacharse al despegar
         else if (player.vy < -250) i = 1;            // subiendo
         else if (player.vy <= 150) i = 2;            // punto más alto
         else i = 3;                                  // cayendo
-        return FRAMES.jump[i];
+        return frames.jump[i];
     }
-    if (player.landTimer > 0) return FRAMES.jump[4]; // aterrizaje
-    const list = FRAMES[player.state];
+    if (player.landTimer > 0) return frames.jump[4]; // aterrizaje
+    const list = frames[player.state];
     return list[player.frame % list.length];
 }
 
 function drawPlayer() {
+    const sp = mySprite();
     const f = currentFrame();
     const dx = PLAYER_SCREEN_X;
     const dy = player.y;
 
-    if (sheetReady) {
+    if (sp.ready) {
         ctx.save();
         ctx.translate(dx, dy);
-        ctx.scale(player.facing * SPRITE_SCALE, SPRITE_SCALE); // el sprite mira a la derecha; se voltea a la izquierda
-        ctx.imageSmoothingEnabled = false;
-        ctx.drawImage(sheet, f.sx, f.sy, f.sw, f.sh, -f.ax, -f.ay, f.sw, f.sh);
+        ctx.scale(player.facing * sp.scale, sp.scale); // el sprite mira a la derecha; se voltea a la izquierda
+        ctx.imageSmoothingEnabled = sp.smooth;
+        ctx.drawImage(sp.img, f.sx, f.sy, f.sw, f.sh, -f.ax, -f.ay, f.sw, f.sh);
         ctx.restore();
     } else {
         ctx.fillStyle = '#fff';
@@ -478,9 +563,31 @@ function drawHUD() {
     ctx.fillText('Estado: ' + STATE_LABEL[player.state], 20, 18);
     ctx.font = '14px sans-serif';
     ctx.fillText('Distancia: ' + Math.max(0, Math.floor(player.x / 10)) + ' m', 20, 42);
-    ctx.fillText('Choques: ' + collisions + '  |  Jugadores: ' + (1 + remotePlayers.size), 20, 62);
+    const statusText = roomFull ? 'Sala llena (solo local)' : 'Jugadores: ' + (1 + remotePlayers.size) + '/2';
+    ctx.fillText('Choques: ' + collisions + '  |  ' + statusText, 20, 62);
 
-    if (time - lastCollisionTime < 0.6) {
+    if (gameOver && gameOverInfo) {
+        const iLost = gameOverInfo.loserSlot === mySlot;
+        ctx.fillStyle = 'rgba(11, 15, 23, 0.72)';
+        ctx.fillRect(0, 0, W, H);
+
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = 'bold 42px sans-serif';
+        ctx.fillStyle = iLost ? '#ff6b6b' : '#3ddc97';
+        ctx.fillText(iLost ? '¡PERDISTE!' : '¡GANASTE!', W / 2, H / 2 - 30);
+
+        ctx.font = '18px sans-serif';
+        ctx.fillStyle = '#e8ecf4';
+        const sub = iLost
+            ? 'Chocaste con un obstáculo · Gana Jugador ' + gameOverInfo.winnerSlot
+            : 'Jugador ' + gameOverInfo.loserSlot + ' chocó con un obstáculo';
+        ctx.fillText(sub, W / 2, H / 2 + 16);
+
+        ctx.font = '15px sans-serif';
+        ctx.fillStyle = '#8d97ab';
+        ctx.fillText('Presiona R para volver a jugar', W / 2, H / 2 + 52);
+    } else if (time - lastCollisionTime < 0.6) {
         ctx.font = 'bold 28px sans-serif';
         ctx.textAlign = 'center';
         ctx.fillStyle = '#e74c3c';
@@ -498,15 +605,15 @@ function drawRemotePlayers(camX) {
     for (const rp of remotePlayers.values()) {
         const dx = rp.x - camX;
         if (dx < -80 || dx > W + 80) continue;
-        const frames = FRAMES[rp.state] || FRAMES.idle;
-        const f = frames[rp.frame % frames.length] || FRAMES.idle[0];
+        const sp = SPRITES[rp.slot] || SPRITES[2];
+        const frames = sp.frames[rp.state] || sp.frames.idle;
+        const f = frames[rp.frame % frames.length] || sp.frames.idle[0];
         ctx.save();
-        ctx.globalAlpha = 0.55;
-        if (sheetReady) {
+        if (sp.ready) {
             ctx.translate(dx, rp.y);
-            ctx.scale((rp.facing || 1) * SPRITE_SCALE, SPRITE_SCALE);
-            ctx.imageSmoothingEnabled = false;
-            ctx.drawImage(sheet, f.sx, f.sy, f.sw, f.sh, -f.ax, -f.ay, f.sw, f.sh);
+            ctx.scale((rp.facing || 1) * sp.scale, sp.scale);
+            ctx.imageSmoothingEnabled = sp.smooth;
+            ctx.drawImage(sp.img, f.sx, f.sy, f.sw, f.sh, -f.ax, -f.ay, f.sw, f.sh);
         } else {
             ctx.fillStyle = '#4aa8ff';
             ctx.fillRect(dx - HIT_W / 2, rp.y - HIT_H, HIT_W, HIT_H);
@@ -516,7 +623,7 @@ function drawRemotePlayers(camX) {
         ctx.fillStyle = '#fff';
         ctx.font = 'bold 12px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText('Jugador 2', dx, rp.y - HIT_H - 12);
+        ctx.fillText('Jugador ' + (rp.slot || 2), dx, rp.y - HIT_H - 12);
     }
 }
 

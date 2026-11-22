@@ -150,12 +150,25 @@ setInterval(() => {
 // 2) Socket.IO — Sprite Colisiones (namespace "/sprite")
 // =========================================================================
 const spriteIo = io.of("/sprite");
+const MAX_SPRITE_PLAYERS = 2;
+let spriteGameOver = false;
 
 spriteIo.on("connection", (socket) => {
+    if (Object.keys(jugadoresSprite).length >= MAX_SPRITE_PLAYERS) {
+        console.log("Sala Sprite llena, rechazado:", socket.id);
+        socket.emit("sprite_full", { message: "Sala llena (máximo 2 jugadores)" });
+        socket.disconnect(true);
+        return;
+    }
+
     console.log("Jugador conectado a Sprite:", socket.id);
+
+    const ocupados = Object.values(jugadoresSprite).map((j) => j.slot);
+    const slot = ocupados.includes(1) ? 2 : 1;
 
     jugadoresSprite[socket.id] = {
         id: socket.id,
+        slot,
         x: 0,
         y: 380,
         facing: 1,
@@ -166,6 +179,7 @@ spriteIo.on("connection", (socket) => {
 
     socket.emit("sprite_init", {
         id: socket.id,
+        slot,
         players: Object.values(jugadoresSprite),
     });
     socket.broadcast.emit("sprite_joined", jugadoresSprite[socket.id]);
@@ -186,9 +200,32 @@ spriteIo.on("connection", (socket) => {
         socket.broadcast.emit("sprite_moved", jugador);
     });
 
+    socket.on("sprite_hit", () => {
+        const jugador = jugadoresSprite[socket.id];
+        if (!jugador || spriteGameOver) return;
+        spriteGameOver = true;
+        const loserSlot = jugador.slot;
+        const winnerSlot = loserSlot === 1 ? 2 : 1;
+        spriteIo.emit("sprite_gameover", { loserSlot, winnerSlot });
+    });
+
+    socket.on("sprite_restart", () => {
+        spriteGameOver = false;
+        for (const id in jugadoresSprite) {
+            jugadoresSprite[id].x = 0;
+            jugadoresSprite[id].y = 380;
+            jugadoresSprite[id].facing = 1;
+            jugadoresSprite[id].state = "idle";
+            jugadoresSprite[id].frame = 0;
+            jugadoresSprite[id].collisions = 0;
+        }
+        spriteIo.emit("sprite_restart");
+    });
+
     socket.on("disconnect", () => {
         console.log("Jugador desconectado de Sprite:", socket.id);
         delete jugadoresSprite[socket.id];
+        if (Object.keys(jugadoresSprite).length === 0) spriteGameOver = false;
         socket.broadcast.emit("sprite_left", { id: socket.id });
     });
 });
